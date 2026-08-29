@@ -98,7 +98,6 @@ hour = st.sidebar.slider("Hour of Day (0–23)", 0, 23, 17)
 seasons = st.sidebar.selectbox(
     "Season", ["Spring", "Summer", "Autumn", "Winter"]
 )
-functioning_day = st.sidebar.selectbox("Functioning Day", ["Yes", "No"])
 holiday = st.sidebar.selectbox("Holiday Status", ["No Holiday", "Holiday"])
 
 st.sidebar.divider()
@@ -136,7 +135,7 @@ def build_feature_dict(target_hour):
         "Seasons_Summer": 1 if seasons == "Summer" else 0,
         "Seasons_Winter": 1 if seasons == "Winter" else 0,
         "Holiday_No Holiday": 1 if holiday == "No Holiday" else 0,
-        "Functioning Day_Yes": 1 if functioning_day == "Yes" else 0,
+        "Functioning Day_Yes": 1,  # Fixed to 1 for continuous active predictions
     }
 
 
@@ -158,89 +157,82 @@ tab1, tab2, tab3, tab4 = st.tabs(
 with tab1:
     st.subheader("Model Predictions & Recommendation")
 
-    if functioning_day == "No":
-        st.warning(
-            "⚠️ The system is marked as Non-Functioning. Demand defaults to 0 across all models."
-        )
-    else:
-        # Predict across all models
-        results = {}
-        for name, model in models.items():
-            pred = model.predict(current_input_df)[0]
-            results[name] = max(0, int(round(pred)))
+    # Predict across all models
+    results = {}
+    for name, model in models.items():
+        pred = model.predict(current_input_df)[0]
+        results[name] = max(0, int(round(pred)))
 
-        best_prediction = results[best_model_name]
+    best_prediction = results[best_model_name]
 
-        # Top Banner: Best Model Prediction Recommendation
-        st.success(
-            f"🏆 **Recommended Best Model:** **{best_model_name}** | "
-            f"Highest R² Score: **{metrics[best_model_name]['R2 Score']:.3f}**"
-        )
+    # Top Banner: Best Model Prediction Recommendation
+    st.success(
+        f"🏆 **Recommended Best Model:** **{best_model_name}** | "
+        f"Highest R² Score: **{metrics[best_model_name]['R2 Score']:.3f}**"
+    )
 
-        col_best, col_selected, col_ensemble = st.columns(3)
+    col_best, col_selected, col_ensemble = st.columns(3)
 
-        with col_best:
-            st.metric(
-                label=f"🏆 Best Model ({best_model_name})",
-                value=f"{best_prediction:,} bikes",
-            )
-
-        with col_selected:
-            st.metric(
-                label=f"Selected Model ({selected_model_name})",
-                value=f"{results[selected_model_name]:,} bikes",
-            )
-
-        with col_ensemble:
-            avg_val = int(np.mean(list(results.values())))
-            st.metric(label="Ensemble Average", value=f"{avg_val:,} bikes")
-
-        st.divider()
-
-        # Side-by-Side Chart and Data Table
-        col_chart, col_table = st.columns([2, 1])
-
-        results_df = pd.DataFrame(
-            list(results.items()), columns=["Model", "Predicted Bike Count"]
-        )
-        results_df["Is Best Model"] = results_df["Model"].apply(
-            lambda x: "🏆 Best" if x == best_model_name else ""
+    with col_best:
+        st.metric(
+            label=f"🏆 Best Model ({best_model_name})",
+            value=f"{best_prediction:,} bikes",
         )
 
-        with col_chart:
-            st.subheader("Comparison Across All Models")
-            st.bar_chart(
-                results_df.set_index("Model")["Predicted Bike Count"],
-                color="#29b5e8",
-            )
+    with col_selected:
+        st.metric(
+            label=f"Selected Model ({selected_model_name})",
+            value=f"{results[selected_model_name]:,} bikes",
+        )
 
-        with col_table:
-            st.subheader("Prediction Details")
-            st.dataframe(
-                results_df,
-                use_container_width=True,
-                hide_index=True,
-            )
+    with col_ensemble:
+        avg_val = int(np.mean(list(results.values())))
+        st.metric(label="Ensemble Average", value=f"{avg_val:,} bikes")
+
+    st.divider()
+
+    # Side-by-Side Chart and Data Table
+    col_chart, col_table = st.columns([2, 1])
+
+    results_df = pd.DataFrame(
+        list(results.items()), columns=["Model", "Predicted Bike Count"]
+    )
+    results_df["Is Best Model"] = results_df["Model"].apply(
+        lambda x: "🏆 Best" if x == best_model_name else ""
+    )
+
+    with col_chart:
+        st.subheader("Comparison Across All Models")
+        st.bar_chart(
+            results_df.set_index("Model")["Predicted Bike Count"],
+            color="#29b5e8",
+        )
+
+    with col_table:
+        st.subheader("Prediction Details")
+        st.dataframe(
+            results_df,
+            use_container_width=True,
+            hide_index=True,
+        )
 
 # TAB 2: 24-Hour Curve Simulation
 with tab2:
     st.subheader("24-Hour Forecast Curve Comparison")
-    if functioning_day == "No":
-        st.warning("System non-functioning. Demand remains 0 across 24 hours.")
-    else:
-        hours_list = list(range(24))
-        daily_records = [build_feature_dict(h) for h in hours_list]
-        full_day_df = pd.DataFrame(daily_records).reindex(
-            columns=FEATURE_NAMES, fill_value=0
-        )
 
-        trend_data = {"Hour": hours_list}
-        for name, model in models.items():
-            preds = model.predict(full_day_df)
-            trend_data[name] = np.maximum(0, np.round(preds)).astype(int)
+    hours_list = list(range(24))
+    daily_records = [build_feature_dict(h) for h in hours_list]
+    full_day_df = pd.DataFrame(daily_records).reindex(
+        columns=FEATURE_NAMES, fill_value=0
+    )
 
-        trend_df = pd.DataFrame(trend_data).set_index("Hour")
-        st.line_chart(trend_df)
+    trend_data = {"Hour": hours_list}
+    for name, model in models.items():
+        preds = model.predict(full_day_df)
+        trend_data[name] = np.maximum(0, np.round(preds)).astype(int)
+
+    trend_df = pd.DataFrame(trend_data).set_index("Hour")
+    st.line_chart(trend_df)
 
 # TAB 3: Batch CSV Scoring
 with tab3:
@@ -258,6 +250,10 @@ with tab3:
             processed_csv = user_csv.reindex(
                 columns=FEATURE_NAMES, fill_value=0
             )
+
+            # Force Functioning Day to 1 if omitted in uploaded CSV
+            if "Functioning Day_Yes" not in user_csv.columns:
+                processed_csv["Functioning Day_Yes"] = 1
 
             selected_m = models[batch_model_choice]
             raw_preds = selected_m.predict(processed_csv)
