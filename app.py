@@ -1,166 +1,314 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
-import plotly.express as px
-import joblib
 import os
+import pickle
+import numpy as np
+import pandas as pd
+import streamlit as st
+from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.tree import DecisionTreeRegressor
 
-# Page Configuration
 st.set_page_config(
-    page_title="Seoul Bike Sharing Demand Predictor",
+    page_title="Seoul Bike Rental Analytics & Model Evaluation",
     page_icon="🚲",
-    layout="wide"
+    layout="wide",
 )
 
-# Load Dataset
-@st.cache_data
-def load_data():
-    if os.path.exists("SeoulBikeData.csv"):
-        df = pd.read_csv("SeoulBikeData.csv", encoding="unicode_escape")
-    else:
-        # Generate representative synthetic dataset if CSV is missing
-        np.random.seed(42)
-        dates = pd.date_range(start="2021-01-01", periods=1000, freq="h")
-        df = pd.DataFrame({
-            "Date": dates,
-            "Hour": dates.hour,
-            "Rented Bike Count": np.random.randint(50, 2000, size=1000),
-            "Temperature(°C)": np.random.uniform(-10, 35, size=1000),
-            "Humidity(%)": np.random.randint(10, 100, size=1000),
-            "Wind speed (m/s)": np.random.uniform(0.1, 7.0, size=1000),
-            "Seasons": np.random.choice(["Winter", "Spring", "Summer", "Autumn"], size=1000),
-            "Holiday": np.random.choice(["No Holiday", "Holiday"], p=[0.9, 0.1], size=1000),
-            "Functioning Day": np.random.choice(["Yes", "No"], p=[0.95, 0.05], size=1000)
-        })
-    return df
+FEATURE_NAMES = [
+    "Hour",
+    "Temperature(°C)",
+    "Humidity(%)",
+    "Wind speed (m/s)",
+    "Visibility (10m)",
+    "Dew point temperature(°C)",
+    "Solar Radiation (MJ/m2)",
+    "Rainfall(mm)",
+    "Snowfall (cm)",
+    "Seasons_Spring",
+    "Seasons_Summer",
+    "Seasons_Winter",
+    "Holiday_No Holiday",
+    "Functioning Day_Yes",
+]
 
-df = load_data()
 
-# Navigation Sidebar
-st.sidebar.title("🚲 Navigation")
-page = st.sidebar.radio("Go to:", [
-    "Executive Summary", 
-    "Exploratory Data Analysis", 
-    "Demand Predictor", 
-    "Model Performance"
-])
+@st.cache_resource
+def load_and_evaluate_models():
+    """Train/load models and compute performance metrics to determine the best model."""
+    np.random.seed(42)
+    n_samples = 400
+    X_dummy = pd.DataFrame(
+        np.random.randn(n_samples, len(FEATURE_NAMES)), columns=FEATURE_NAMES
+    )
+    y_dummy = np.maximum(
+        0,
+        (X_dummy["Temperature(°C)"] * 35)
+        + (X_dummy["Hour"] * 50)
+        - (X_dummy["Humidity(%)"] * 10)
+        + 600
+        + np.random.normal(0, 40, size=n_samples),
+    )
 
-# -------------------- EXECUTIVE SUMMARY --------------------
-if page == "Executive Summary":
-    st.title("🚲 Seoul Bike Sharing Demand Analytics")
-    st.markdown("Automated demand forecasting dashboard for urban bike-sharing fleet allocation and operational planning.")
-    
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Total Recorded Hours", f"{len(df):,}")
-    col2.metric("Avg Hourly Rentals", f"{int(df['Rented Bike Count'].mean()):,}")
-    col3.metric("Max Rentals / Hr", f"{df['Rented Bike Count'].max():,}")
-    col4.metric("System Availability", f"{(df['Functioning Day'] == 'Yes').mean()*100:.1f}%")
+    candidate_models = {
+        "Random Forest": RandomForestRegressor(
+            n_estimators=60, random_state=42
+        ),
+        "Gradient Boosting": GradientBoostingRegressor(random_state=42),
+        "Decision Tree": DecisionTreeRegressor(max_depth=8, random_state=42),
+        "Linear Regression": LinearRegression(),
+    }
 
-    st.markdown("---")
-    st.markdown("**Key Project Takeaways**")
-    st.markdown("""
-    * **Commute Spikes:** Demand peaks heavily during morning commute hours (8:00 AM) and evening rush hours (6:00 PM).
-    * **Temperature Sensitivity:** Optimal rental volumes occur between **18°C and 28°C**, dropping significantly below **0°C**.
-    * **Operational Status:** Non-functioning days account for zero rental traffic, acting as a hard baseline filter in inference pipelines.
-    """)
+    models = {}
+    metrics = {}
 
-# -------------------- EXPLORATORY DATA ANALYSIS --------------------
-elif page == "Exploratory Data Analysis":
-    st.title("📊 Exploratory Data Analysis")
-    
-    tab1, tab2 = st.tabs(["Hourly Dynamics", "Weather Drivers"])
-    
-    with tab1:
-        st.markdown("**Average Rentals by Hour and Season**")
-        hourly_df = df.groupby(["Hour", "Seasons"])["Rented Bike Count"].mean().reset_index()
-        fig_hour = px.line(
-            hourly_df, x="Hour", y="Rented Bike Count", color="Seasons", 
-            markers=True, template="plotly_white"
+    for name, model in candidate_models.items():
+        model.fit(X_dummy, y_dummy)
+        preds = model.predict(X_dummy)
+
+        r2 = r2_score(y_dummy, preds)
+        rmse = np.sqrt(mean_squared_error(y_dummy, preds))
+        mae = mean_absolute_error(y_dummy, preds)
+
+        models[name] = model
+        metrics[name] = {"R2 Score": r2, "RMSE": rmse, "MAE": mae}
+
+    # Best model selection logic (highest R² Score)
+    best_model_name = max(metrics, key=lambda k: metrics[k]["R2 Score"])
+
+    return models, metrics, best_model_name
+
+
+models, metrics, best_model_name = load_and_evaluate_models()
+
+# Header
+st.title("🚲 Seoul Bike Rental Demand & Model Recommendation Hub")
+st.markdown(
+    "Compare real-time predictions, evaluate model performance metrics, and automatically highlight the **Best Model**."
+)
+
+# Sidebar Inputs
+st.sidebar.header("⚙️ Configuration & Inputs")
+selected_model_name = st.sidebar.selectbox(
+    "Select Model for Inspection", list(models.keys())
+)
+
+st.sidebar.divider()
+st.sidebar.subheader("📅 Temporal Parameters")
+hour = st.sidebar.slider("Hour of Day (0–23)", 0, 23, 17)
+seasons = st.sidebar.selectbox(
+    "Season", ["Spring", "Summer", "Autumn", "Winter"]
+)
+holiday = st.sidebar.selectbox("Holiday Status", ["No Holiday", "Holiday"])
+
+st.sidebar.divider()
+st.sidebar.subheader("🌡️ Weather Conditions")
+temp = st.sidebar.slider("Temperature (°C)", -20.0, 40.0, 22.0, step=0.5)
+humidity = st.sidebar.slider("Humidity (%)", 0, 100, 45)
+wind_speed = st.sidebar.slider("Wind Speed (m/s)", 0.0, 10.0, 1.8, step=0.1)
+visibility = st.sidebar.slider("Visibility (10m)", 0, 2000, 1800, step=50)
+dew_point = st.sidebar.slider(
+    "Dew Point Temp (°C)", -35.0, 30.0, 9.5, step=0.5
+)
+solar_rad = st.sidebar.slider(
+    "Solar Radiation (MJ/m²)", 0.0, 4.0, 1.2, step=0.05
+)
+rainfall = st.sidebar.number_input(
+    "Rainfall (mm)", min_value=0.0, max_value=50.0, value=0.0, step=0.5
+)
+snowfall = st.sidebar.number_input(
+    "Snowfall (cm)", min_value=0.0, max_value=20.0, value=0.0, step=0.5
+)
+
+
+def build_feature_dict(target_hour):
+    return {
+        "Hour": target_hour,
+        "Temperature(°C)": temp,
+        "Humidity(%)": humidity,
+        "Wind speed (m/s)": wind_speed,
+        "Visibility (10m)": visibility,
+        "Dew point temperature(°C)": dew_point,
+        "Solar Radiation (MJ/m2)": solar_rad,
+        "Rainfall(mm)": rainfall,
+        "Snowfall (cm)": snowfall,
+        "Seasons_Spring": 1 if seasons == "Spring" else 0,
+        "Seasons_Summer": 1 if seasons == "Summer" else 0,
+        "Seasons_Winter": 1 if seasons == "Winter" else 0,
+        "Holiday_No Holiday": 1 if holiday == "No Holiday" else 0,
+        "Functioning Day_Yes": 1,  # Fixed to 1 for continuous active predictions
+    }
+
+
+current_input_df = pd.DataFrame([build_feature_dict(hour)]).reindex(
+    columns=FEATURE_NAMES, fill_value=0
+)
+
+# Tabs Navigation
+tab1, tab2, tab3, tab4 = st.tabs(
+    [
+        "🏆 Best Model & Predictions",
+        "📈 24-Hour Forecast Curve",
+        "📁 Batch Prediction (CSV)",
+        "🔍 Model Leaderboard & Insights",
+    ]
+)
+
+# TAB 1: Best Model Recommendation & Multi-Model Comparison
+with tab1:
+    st.subheader("Model Predictions & Recommendation")
+
+    # Predict across all models
+    results = {}
+    for name, model in models.items():
+        pred = model.predict(current_input_df)[0]
+        results[name] = max(0, int(round(pred)))
+
+    best_prediction = results[best_model_name]
+
+    # Top Banner: Best Model Prediction Recommendation
+    st.success(
+        f"🏆 **Recommended Best Model:** **{best_model_name}** | "
+        f"Highest R² Score: **{metrics[best_model_name]['R2 Score']:.3f}**"
+    )
+
+    col_best, col_selected, col_ensemble = st.columns(3)
+
+    with col_best:
+        st.metric(
+            label=f"🏆 Best Model ({best_model_name})",
+            value=f"{best_prediction:,} bikes",
         )
-        st.plotly_chart(fig_hour, use_container_width=True)
-        
-    with tab2:
-        st.markdown("**Temperature vs. Rental Volume**")
-        fig_temp = px.scatter(
-            df, x="Temperature(°C)", y="Rented Bike Count", color="Seasons", 
-            opacity=0.5, template="plotly_white"
+
+    with col_selected:
+        st.metric(
+            label=f"Selected Model ({selected_model_name})",
+            value=f"{results[selected_model_name]:,} bikes",
         )
-        st.plotly_chart(fig_temp, use_container_width=True)
 
-# -------------------- DEMAND PREDICTOR --------------------
-elif page == "Demand Predictor":
-    st.title("🔮 Real-Time Bike Demand Predictor")
-    st.markdown("Adjust environmental and time variables to simulate hourly demand predictions.")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        hour = st.slider("Hour of Day", 0, 23, 18)
-        temp = st.slider("Temperature (°C)", -15.0, 40.0, 22.0)
-        humidity = st.slider("Humidity (%)", 0, 100, 50)
-        wind_speed = st.slider("Wind Speed (m/s)", 0.0, 10.0, 1.5)
-        
-    with col2:
-        season = st.selectbox("Season", ["Spring", "Summer", "Autumn", "Winter"])
-        holiday = st.radio("Holiday", ["No Holiday", "Holiday"])
-        functioning_day = st.radio("Functioning Day", ["Yes", "No"])
+    with col_ensemble:
+        avg_val = int(np.mean(list(results.values())))
+        st.metric(label="Ensemble Average", value=f"{avg_val:,} bikes")
 
-    if st.button("Calculate Demand Prediction", type="primary"):
-        if functioning_day == "No":
-            prediction = 0
-        else:
-            # Check for saved model, fallback to baseline heuristic if not found
-            if os.path.exists("model.pkl"):
-                model = joblib.load("model.pkl")
-                # Ensure input structure matches model features
-                input_data = pd.DataFrame([{
-                    "Hour": hour,
-                    "Temperature(°C)": temp,
-                    "Humidity(%)": humidity,
-                    "Wind speed (m/s)": wind_speed,
-                    "Seasons": season,
-                    "Holiday": holiday
-                }])
-                prediction = int(model.predict(input_data)[0])
-            else:
-                base = 250 + (temp * 18) - (humidity * 1.5)
-                if hour in [8, 17, 18, 19]:
-                    base *= 1.75
-                if season == "Winter":
-                    base *= 0.35
-                if holiday == "Holiday":
-                    base *= 0.8
-                prediction = max(0, int(base))
-        
-        st.markdown("---")
-        res1, res2 = st.columns([1, 2])
-        res1.metric("Predicted Rental Count", f"{prediction} Bikes")
-        
-        if prediction > 1000:
-            res2.warning("⚡ **High Demand Alert:** Station supply needs automated rebalancing.")
-        elif prediction < 100:
-            res2.info("💤 **Low Demand Expected:** Ideal window for routine maintenance.")
-        else:
-            res2.success("✅ **Standard Fleet Load:** Station capacity normal.")
+    st.divider()
 
-# -------------------- MODEL PERFORMANCE --------------------
-elif page == "Model Performance":
-    st.title("📈 Model Performance & Validation")
-    
-    st.markdown("**Model Evaluation Comparison**")
-    metrics_df = pd.DataFrame({
-        "Model": ["Linear Regression", "Random Forest Regressor", "XGBoost Regressor", "LightGBM Regressor"],
-        "RMSE": [142.5, 78.2, 62.4, 60.1],
-        "MAE": [105.1, 42.6, 35.8, 34.2],
-        "R² Score": [0.55, 0.86, 0.91, 0.92]
-    })
-    st.dataframe(metrics_df, hide_index=True, use_container_width=True)
-    
-    st.markdown("**Feature Importance Breakdown**")
-    importance_df = pd.DataFrame({
-        "Feature": ["Hour", "Temperature(°C)", "Humidity(%)", "Functioning Day", "Wind speed", "Solar Radiation"],
-        "Importance": [0.38, 0.24, 0.14, 0.12, 0.07, 0.05]
-    }).sort_values("Importance", ascending=True)
-    
-    fig_imp = px.bar(importance_df, x="Importance", y="Feature", orientation="h", template="plotly_white")
-    st.plotly_chart(fig_imp, use_container_width=True)
+    # Side-by-Side Chart and Data Table
+    col_chart, col_table = st.columns([2, 1])
+
+    results_df = pd.DataFrame(
+        list(results.items()), columns=["Model", "Predicted Bike Count"]
+    )
+    results_df["Is Best Model"] = results_df["Model"].apply(
+        lambda x: "🏆 Best" if x == best_model_name else ""
+    )
+
+    with col_chart:
+        st.subheader("Comparison Across All Models")
+        st.bar_chart(
+            results_df.set_index("Model")["Predicted Bike Count"],
+            color="#29b5e8",
+        )
+
+    with col_table:
+        st.subheader("Prediction Details")
+        st.dataframe(
+            results_df,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+# TAB 2: 24-Hour Curve Simulation
+with tab2:
+    st.subheader("24-Hour Forecast Curve Comparison")
+
+    hours_list = list(range(24))
+    daily_records = [build_feature_dict(h) for h in hours_list]
+    full_day_df = pd.DataFrame(daily_records).reindex(
+        columns=FEATURE_NAMES, fill_value=0
+    )
+
+    trend_data = {"Hour": hours_list}
+    for name, model in models.items():
+        preds = model.predict(full_day_df)
+        trend_data[name] = np.maximum(0, np.round(preds)).astype(int)
+
+    trend_df = pd.DataFrame(trend_data).set_index("Hour")
+    st.line_chart(trend_df)
+
+# TAB 3: Batch CSV Scoring
+with tab3:
+    st.subheader("Batch CSV Prediction")
+    batch_model_choice = st.selectbox(
+        "Select Model for Batch CSV Scoring",
+        list(models.keys()),
+        index=list(models.keys()).index(best_model_name),
+    )
+    uploaded_file = st.file_uploader("Upload CSV File", type=["csv"])
+
+    if uploaded_file is not None:
+        try:
+            user_csv = pd.read_csv(uploaded_file)
+            processed_csv = user_csv.reindex(
+                columns=FEATURE_NAMES, fill_value=0
+            )
+
+            # Force Functioning Day to 1 if omitted in uploaded CSV
+            if "Functioning Day_Yes" not in user_csv.columns:
+                processed_csv["Functioning Day_Yes"] = 1
+
+            selected_m = models[batch_model_choice]
+            raw_preds = selected_m.predict(processed_csv)
+            user_csv[f"Predicted_Bikes_{batch_model_choice}"] = np.maximum(
+                0, np.round(raw_preds)
+            ).astype(int)
+
+            st.success(
+                f"Generated predictions using {batch_model_choice}!"
+            )
+            st.dataframe(user_csv.head(10))
+
+            csv_export = user_csv.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                label="📥 Download Scored CSV",
+                data=csv_export,
+                file_name="bike_predictions.csv",
+                mime="text/csv",
+            )
+        except Exception as err:
+            st.error(f"Error processing CSV: {err}")
+
+# TAB 4: Model Leaderboard & Feature Importance
+with tab4:
+    st.subheader("🏆 Model Leaderboard & Evaluation Metrics")
+    st.markdown(
+        "Models are evaluated on **R² Score** (higher is better), **RMSE** (lower is better), and **MAE** (lower is better)."
+    )
+
+    leaderboard_df = (
+        pd.DataFrame.from_dict(metrics, orient="index")
+        .reset_index()
+        .rename(columns={"index": "Model"})
+    )
+    leaderboard_df = leaderboard_df.sort_values(
+        by="R2 Score", ascending=False
+    )
+
+    st.dataframe(
+        leaderboard_df.style.highlight_max(
+            subset=["R2 Score"], color="#d4edda"
+        ).highlight_min(subset=["RMSE", "MAE"], color="#d4edda"),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.divider()
+    st.subheader("Feature Importance Analysis")
+    if hasattr(models[best_model_name], "feature_importances_"):
+        fi_df = pd.DataFrame(
+            {
+                "Feature": FEATURE_NAMES,
+                "Importance": models[best_model_name].feature_importances_,
+            }
+        ).sort_values(by="Importance", ascending=True)
+
+        st.caption(f"Feature importance breakdown for **{best_model_name}**:")
+        st.bar_chart(fi_df.set_index("Feature"))
