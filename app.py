@@ -31,7 +31,10 @@ def load_and_preprocess_data(file_path_or_buffer):
     except Exception:
         df = pd.read_csv(file_path_or_buffer)
         
-    # Standardize date column parsing
+    # Clean BOM or encoding artifacts from column names
+    df.columns = [c.replace('ï»¿', '') for c in df.columns]
+    
+    # Parse date column
     df['Date'] = pd.to_datetime(df['Date'], format='%d/%m/%Y', errors='coerce')
     
     # Feature Engineering
@@ -43,7 +46,7 @@ def load_and_preprocess_data(file_path_or_buffer):
 
 @st.cache_resource
 def train_models(df):
-    # Select features & target exactly as in the report
+    # Select features & target
     num_cols = ['Hour', 'Temperature (°C)', 'Humidity (%)', 'Wind speed (m/s)', 
                 'Visibility (10m)', 'Dew point temperature (°C)', 'Solar Radiation (MJ/m2)', 
                 'Rainfall(mm)', 'Snowfall (cm)', 'DayOfWeek', 'Month', 'IsWeekend']
@@ -68,7 +71,7 @@ def train_models(df):
         ('cat', OneHotEncoder(handle_unknown='ignore'), cat_cols)
     ])
     
-    # Define 4 Models with tuned parameters from the report
+    # Define 4 Regression Models
     models = {
         'Linear Regression': Pipeline([
             ('preprocessor', preprocessor_lr),
