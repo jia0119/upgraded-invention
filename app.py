@@ -34,27 +34,124 @@ FEATURE_NAMES = [
 
 @st.cache_resource
 def load_and_evaluate_models():
-    """Train/load models and compute performance metrics to determine the best model."""
-    np.random.seed(42)
-    n_samples = 400
-    X_dummy = pd.DataFrame(
-        np.random.randn(n_samples, len(FEATURE_NAMES)), columns=FEATURE_NAMES
-    )
-    y_dummy = np.maximum(
-        0,
-        (X_dummy["Temperature(°C)"] * 35)
-        + (X_dummy["Hour"] * 50)
-        - (X_dummy["Humidity(%)"] * 10)
-        + 600
-        + np.random.normal(0, 40, size=n_samples),
-    )
+    """Train/load models using real Seoul Bike dataset if available, or realistic synthetic data."""
+    dataset_path = "SeoulBikeData.csv"
+
+    if os.path.exists(dataset_path):
+        try:
+            df = pd.read_csv(dataset_path, encoding="utf-8-sig")
+        except Exception:
+            df = pd.read_csv(dataset_path, encoding="latin1")
+
+        # Clean column names
+        clean_cols = []
+        for col in df.columns:
+            c = col.replace("ï»¿", "").replace("Â°", "°").strip()
+            if c.startswith("Temperature"):
+                c = "Temperature(°C)"
+            elif c.startswith("Humidity"):
+                c = "Humidity(%)"
+            elif c.startswith("Dew point temperature"):
+                c = "Dew point temperature(°C)"
+            elif c.startswith("Wind speed"):
+                c = "Wind speed (m/s)"
+            elif c.startswith("Visibility"):
+                c = "Visibility (10m)"
+            elif c.startswith("Solar Radiation"):
+                c = "Solar Radiation (MJ/m2)"
+            elif c.startswith("Rainfall"):
+                c = "Rainfall(mm)"
+            elif c.startswith("Snowfall"):
+                c = "Snowfall (cm)"
+            clean_cols.append(c)
+        df.columns = clean_cols
+
+        # One-hot encoding
+        df_encoded = pd.get_dummies(
+            df,
+            columns=["Seasons", "Holiday", "Functioning Day"],
+            drop_first=False,
+        )
+        X = df_encoded.reindex(columns=FEATURE_NAMES, fill_value=0)
+        y = df_encoded["Rented Bike Count"]
+    else:
+        # Fallback generator with realistic feature distributions matching Seoul Bike data
+        np.random.seed(42)
+        n_samples = 1500
+
+        hour = np.random.randint(0, 24, size=n_samples)
+        temp = np.random.uniform(-10, 35, size=n_samples)
+        humidity = np.random.uniform(15, 95, size=n_samples)
+        wind = np.random.uniform(0.1, 7.0, size=n_samples)
+        visibility = np.random.uniform(100, 2000, size=n_samples)
+        dew_point = temp - ((100 - humidity) / 5)
+        solar_rad = np.where(
+            (hour >= 6) & (hour <= 19),
+            np.random.uniform(0, 3.5, size=n_samples),
+            0,
+        )
+        rainfall = np.random.choice(
+            [0, np.random.exponential(2)], p=[0.9, 0.1], size=n_samples
+        )
+        snowfall = np.random.choice(
+            [0, np.random.exponential(1)], p=[0.95, 0.05], size=n_samples
+        )
+
+        seasons = np.random.choice(
+            ["Spring", "Summer", "Winter", "Autumn"], size=n_samples
+        )
+        seasons_spring = (seasons == "Spring").astype(int)
+        seasons_summer = (seasons == "Summer").astype(int)
+        seasons_winter = (seasons == "Winter").astype(int)
+        holiday_no_holiday = np.random.choice([1, 0], p=[0.9, 0.1], size=n_samples)
+        functioning_day_yes = np.ones(n_samples, dtype=int)
+
+        y = (
+            250
+            + (temp * 22)
+            + (24 - np.abs(hour - 18)) * 35
+            - (humidity * 2.0)
+            + (solar_rad * 75)
+            - (rainfall * 60)
+            + (seasons_summer * 120)
+            - (seasons_winter * 150)
+            + np.random.normal(0, 45, size=n_samples)
+        )
+        y = np.maximum(10, y)
+
+        X = pd.DataFrame(
+            {
+                "Hour": hour,
+                "Temperature(°C)": temp,
+                "Humidity(%)": humidity,
+                "Wind speed (m/s)": wind,
+                "Visibility (10m)": visibility,
+                "Dew point temperature(°C)": dew_point,
+                "Solar Radiation (MJ/m2)": solar_rad,
+                "Rainfall(mm)": rainfall,
+                "Snowfall (cm)": snowfall,
+                "Seasons_Spring": seasons_spring,
+                "Seasons_Summer": seasons_summer,
+                "Seasons_Winter": seasons_winter,
+                "Holiday_No Holiday": holiday_no_holiday,
+                "Functioning Day_Yes": functioning_day_yes,
+            },
+            columns=FEATURE_NAMES,
+        )
+
+    # Train-Test Split (80/20) for realistic evaluation metrics
+    split_idx = int(len(X) * 0.8)
+    X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
+    y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
 
     candidate_models = {
         "Random Forest": RandomForestRegressor(
-            n_estimators=60, random_state=42
+            n_estimators=100, random_state=42, n_jobs=-1
         ),
-        "Gradient Boosting": GradientBoostingRegressor(random_state=42),
-        "Decision Tree": DecisionTreeRegressor(max_depth=8, random_state=42),
+        "Gradient Boosting": GradientBoostingRegressor(
+            n_estimators=150, learning_rate=0.1, max_depth=5, random_state=42
+        ),
+        "Decision Tree": DecisionTreeRegressor(max_depth=10, random_state=42),
         "Linear Regression": LinearRegression(),
     }
 
@@ -62,17 +159,16 @@ def load_and_evaluate_models():
     metrics = {}
 
     for name, model in candidate_models.items():
-        model.fit(X_dummy, y_dummy)
-        preds = model.predict(X_dummy)
+        model.fit(X_train, y_train)
+        preds = model.predict(X_test)
 
-        r2 = r2_score(y_dummy, preds)
-        rmse = np.sqrt(mean_squared_error(y_dummy, preds))
-        mae = mean_absolute_error(y_dummy, preds)
+        r2 = r2_score(y_test, preds)
+        rmse = np.sqrt(mean_squared_error(y_test, preds))
+        mae = mean_absolute_error(y_test, preds)
 
         models[name] = model
         metrics[name] = {"R2 Score": r2, "RMSE": rmse, "MAE": mae}
 
-    # Best model selection logic (highest R² Score)
     best_model_name = max(metrics, key=lambda k: metrics[k]["R2 Score"])
 
     return models, metrics, best_model_name
@@ -96,7 +192,7 @@ st.sidebar.divider()
 st.sidebar.subheader("📅 Temporal Parameters")
 hour = st.sidebar.slider("Hour of Day (0–23)", 0, 23, 17)
 seasons = st.sidebar.selectbox(
-    "Season", ["Spring", "Summer", "Autumn", "Winter"]
+    "Season", ["Spring", "Summer", "Autumn", "Winter"], index=1
 )
 holiday = st.sidebar.selectbox("Holiday Status", ["No Holiday", "Holiday"])
 
@@ -135,7 +231,7 @@ def build_feature_dict(target_hour):
         "Seasons_Summer": 1 if seasons == "Summer" else 0,
         "Seasons_Winter": 1 if seasons == "Winter" else 0,
         "Holiday_No Holiday": 1 if holiday == "No Holiday" else 0,
-        "Functioning Day_Yes": 1,  # Fixed to 1 for continuous active predictions
+        "Functioning Day_Yes": 1,
     }
 
 
@@ -157,7 +253,6 @@ tab1, tab2, tab3, tab4 = st.tabs(
 with tab1:
     st.subheader("Model Predictions & Recommendation")
 
-    # Predict across all models
     results = {}
     for name, model in models.items():
         pred = model.predict(current_input_df)[0]
@@ -165,7 +260,6 @@ with tab1:
 
     best_prediction = results[best_model_name]
 
-    # Top Banner: Best Model Prediction Recommendation
     st.success(
         f"🏆 **Recommended Best Model:** **{best_model_name}** | "
         f"Highest R² Score: **{metrics[best_model_name]['R2 Score']:.3f}**"
@@ -191,7 +285,6 @@ with tab1:
 
     st.divider()
 
-    # Side-by-Side Chart and Data Table
     col_chart, col_table = st.columns([2, 1])
 
     results_df = pd.DataFrame(
@@ -251,7 +344,6 @@ with tab3:
                 columns=FEATURE_NAMES, fill_value=0
             )
 
-            # Force Functioning Day to 1 if omitted in uploaded CSV
             if "Functioning Day_Yes" not in user_csv.columns:
                 processed_csv["Functioning Day_Yes"] = 1
 
