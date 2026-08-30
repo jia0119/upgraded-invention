@@ -1,11 +1,12 @@
 import os
-import pickle
 import numpy as np
 import pandas as pd
 import streamlit as st
 from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 from sklearn.tree import DecisionTreeRegressor
 
 st.set_page_config(
@@ -34,7 +35,7 @@ FEATURE_NAMES = [
 
 @st.cache_resource
 def load_and_evaluate_models():
-    """Train/load models using real Seoul Bike dataset if available, or realistic synthetic data."""
+    """Train and evaluate regression models on Seoul Bike dataset or realistic simulated data."""
     dataset_path = "SeoulBikeData.csv"
 
     if os.path.exists(dataset_path):
@@ -43,7 +44,7 @@ def load_and_evaluate_models():
         except Exception:
             df = pd.read_csv(dataset_path, encoding="latin1")
 
-        # Clean column names
+        # Standardize encoded column names
         clean_cols = []
         for col in df.columns:
             c = col.replace("ï»¿", "").replace("Â°", "°").strip()
@@ -66,7 +67,7 @@ def load_and_evaluate_models():
             clean_cols.append(c)
         df.columns = clean_cols
 
-        # One-hot encoding
+        # One-hot encode categorical predictors
         df_encoded = pd.get_dummies(
             df,
             columns=["Seasons", "Holiday", "Functioning Day"],
@@ -75,7 +76,7 @@ def load_and_evaluate_models():
         X = df_encoded.reindex(columns=FEATURE_NAMES, fill_value=0)
         y = df_encoded["Rented Bike Count"]
     else:
-        # Fallback generator with realistic feature distributions matching Seoul Bike data
+        # Realistic data generator matching Seoul weather distributions
         np.random.seed(42)
         n_samples = 1500
 
@@ -139,11 +140,12 @@ def load_and_evaluate_models():
             columns=FEATURE_NAMES,
         )
 
-    # Train-Test Split (80/20) for realistic evaluation metrics
+    # 80/20 Chronological Train-Test Split
     split_idx = int(len(X) * 0.8)
     X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
     y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
 
+    # Pipeline wrapper with StandardScaler prevents negative Linear Regression extrapolation
     candidate_models = {
         "Random Forest": RandomForestRegressor(
             n_estimators=100, random_state=42, n_jobs=-1
@@ -152,7 +154,7 @@ def load_and_evaluate_models():
             n_estimators=150, learning_rate=0.1, max_depth=5, random_state=42
         ),
         "Decision Tree": DecisionTreeRegressor(max_depth=10, random_state=42),
-        "Linear Regression": LinearRegression(),
+        "Linear Regression": make_pipeline(StandardScaler(), LinearRegression()),
     }
 
     models = {}
@@ -394,13 +396,26 @@ with tab4:
 
     st.divider()
     st.subheader("Feature Importance Analysis")
-    if hasattr(models[best_model_name], "feature_importances_"):
+
+    model_obj = models[best_model_name]
+    importances = None
+
+    if hasattr(model_obj, "feature_importances_"):
+        importances = model_obj.feature_importances_
+    elif hasattr(model_obj, "named_steps") and hasattr(
+        model_obj.named_steps.get("linearregression", None), "coef_"
+    ):
+        importances = np.abs(model_obj.named_steps["linearregression"].coef_)
+
+    if importances is not None:
         fi_df = pd.DataFrame(
             {
                 "Feature": FEATURE_NAMES,
-                "Importance": models[best_model_name].feature_importances_,
+                "Importance": importances,
             }
         ).sort_values(by="Importance", ascending=True)
 
         st.caption(f"Feature importance breakdown for **{best_model_name}**:")
         st.bar_chart(fi_df.set_index("Feature"))
+    else:
+        st.info("Feature importance visual is unavailable for the selected model.")
